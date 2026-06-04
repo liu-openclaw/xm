@@ -1,0 +1,65 @@
+version: "3.8"
+
+services:
+  mongodb:
+    image: mongo:7
+    container_name: st_mongodb
+    restart: always
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - app-network
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: st_backend
+    restart: always
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    env_file:
+      - ./backend/.env.production
+    volumes:
+      - backend_uploads:/app/uploads
+    networks:
+      - app-network
+
+  rag:
+    build:
+      context: ./backend/agent
+      dockerfile: Dockerfile
+    container_name: st_rag
+    restart: always
+    environment:
+      - DASHSCOPE_API_KEY=sk-6c8d44c8b61742abae46c8907b974133
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: st_frontend
+    restart: always
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+      - rag
+    networks:
+      - app-network
+
+volumes:
+  mongo_data:
+  backend_uploads:
+
+networks:
+  app-network:
+    driver: bridge
