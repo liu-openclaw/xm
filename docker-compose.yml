@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   mongodb:
     image: mongo:7
@@ -31,17 +29,6 @@ services:
     networks:
       - app-network
 
-  rag:
-    build:
-      context: ./backend/agent
-      dockerfile: Dockerfile
-    container_name: st_rag
-    restart: always
-    environment:
-      - DASHSCOPE_API_KEY=sk-6c8d44c8b61742abae46c8907b974133
-    networks:
-      - app-network
-
   frontend:
     build:
       context: ./frontend
@@ -52,9 +39,21 @@ services:
       - "80:80"
     depends_on:
       - backend
-      - rag
     networks:
       - app-network
+
+  rag:
+    build:
+      context: ./backend/agent
+      dockerfile: Dockerfile
+    container_name: st_rag
+    restart: always
+    environment:
+      - DASHSCOPE_API_KEY=sk-6c8d44c8b61742abae46c8907b974133
+    networks:
+      - app-network
+    profiles:
+      - rag
 
 volumes:
   mongo_data:
