@@ -14,9 +14,11 @@ jobs:
           host: 182.92.211.232
           username: root
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          command_timeout: 30m
           script: |
             cd /app/second-hand-trade
+            git stash --include-untracked
             git pull origin master
-            docker compose build --no-cache frontend backend rag
+            docker compose build frontend backend rag
             docker compose up -d --remove-orphans
             docker system prune -f
