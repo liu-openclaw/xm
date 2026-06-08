@@ -26,6 +26,14 @@ request.interceptors.response.use(
   (response) => response.data,
   async (error) => {
     const { config, response } = error
+
+    // 互踢 / Token 无效：直接踢出，不尝试刷新
+    if (response?.status === 401 && !response.data?.expired) {
+      clearTokens()
+      router.push('/login')
+      return Promise.reject(error)
+    }
+
     // Token 过期，尝试刷新
     if (response?.status === 401 && response.data?.expired && !config._retry) {
       config._retry = true
