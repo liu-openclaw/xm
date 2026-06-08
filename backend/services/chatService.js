@@ -10,7 +10,9 @@ exports.getConversations = async (userId) => {
   const conversations = await Message.aggregate([
     {
       $match: {
-        $or: [{ sender: userObjectId }, { receiver: userObjectId }]
+        $or: [{ sender: userObjectId }, { receiver: userObjectId }],
+        // 排除自会话：sender !== receiver
+        $expr: { $ne: ['$sender', '$receiver'] }
       }
     },
     { $sort: { createdAt: -1 } },

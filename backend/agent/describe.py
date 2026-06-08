@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""智能商品描述生成服务 - 通过命令行调用千问 VL API 分析图片并生成商品信息"""
+"""智能商品描述生成服务 - 通过千问 VL API 分析图片并生成商品信息"""
+"""注意：不依赖 openai SDK，仅使用 requests + 标准库"""
 
 import argparse
 import base64
 import json
 import sys
 import os
+import re
 
 
 def encode_image(image_path: str) -> str:
@@ -28,25 +30,29 @@ def get_mime_type(image_path: str) -> str:
 
 
 def call_qwen_vl(image_path: str, api_key: str, api_base: str) -> dict:
-    """调用千问 VL API 分析图片"""
-    from openai import OpenAI
+    """通过 HTTP 直接调用千问 VL API（兼容 OpenAI 协议）"""
+    import requests
 
-    client = OpenAI(api_key=api_key, base_url=api_base)
     image_b64 = encode_image(image_path)
     mime_type = get_mime_type(image_path)
 
     prompt = (
         "请根据这张商品图片，生成以下信息，以 JSON 格式返回：\n"
-        "title（商品标题，20字以内）、\n"
-        "description（详细描述，50-100字）、\n"
-        "category（分类，从 数码/家居/服饰/图书/美妆/运动/其他 中选择）、\n"
-        "condition（成色，从 全新/几乎全新/轻微使用/明显使用 中选择）。\n"
+        'title（商品标题，20字以内）、\n'
+        'description（详细描述，50-100字）、\n'
+        'category（分类，从 数码/家居/服饰/图书/美妆/运动/其他 中选择）、\n'
+        'condition（成色，从 全新/几乎全新/轻微使用/明显使用 中选择）。\n'
         "只输出 JSON，不要其他内容。"
     )
 
-    response = client.chat.completions.create(
-        model="qwen-vl-max",
-        messages=[
+    url = api_base.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": "qwen-vl-max",
+        "messages": [
             {
                 "role": "user",
                 "content": [
@@ -60,11 +66,14 @@ def call_qwen_vl(image_path: str, api_key: str, api_base: str) -> dict:
                 ],
             }
         ],
-        max_tokens=500,
-        temperature=0.3,
-    )
+        "max_tokens": 500,
+        "temperature": 0.3,
+    }
 
-    content = response.choices[0].message.content.strip()
+    resp = requests.post(url, headers=headers, json=payload, timeout=25)
+    resp.raise_for_status()
+
+    content = resp.json()["choices"][0]["message"]["content"].strip()
 
     # 尝试提取 JSON（模型可能在 JSON 外加了 ```json 标记）
     if content.startswith("```"):
@@ -77,8 +86,6 @@ def call_qwen_vl(image_path: str, api_key: str, api_base: str) -> dict:
         result = json.loads(content)
     except json.JSONDecodeError:
         # 尝试用正则提取 JSON 对象
-        import re
-
         match = re.search(r"\{[^{}]*\}", content, re.DOTALL)
         if match:
             result = json.loads(match.group())

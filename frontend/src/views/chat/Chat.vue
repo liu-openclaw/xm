@@ -142,14 +142,15 @@ async function send() {
 
   const content = inputText.value.trim()
   const ids = conversationId.value.split('_')
-  const receiverId = ids.find(id => id !== userId.value) || ids[1]
+  const receiverId = ids[0] === userId.value ? ids[1] : ids[0]
 
   inputText.value = ''
 
   try {
-    await sendMessage({ receiverId, content })
+    const ack: any = await sendMessage({ receiverId, content })
+    const msgId = ack?.messageId || Date.now().toString()
     chatStore.addMessage({
-      _id: Date.now().toString(),
+      _id: msgId,
       conversationId: conversationId.value,
       sender: { _id: userId.value, nickname: userStore.user?.nickname || '', avatar: userStore.user?.avatar || '' },
       receiver: receiverId,

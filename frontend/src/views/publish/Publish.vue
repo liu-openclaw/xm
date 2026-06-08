@@ -171,7 +171,13 @@ async function aiFill() {
     }
 
     const res = await aiApi.describe(imageFile)
-    const data = res.data
+
+    // 安全提取 data，防止 undefined 导致白色空框
+    const data = res?.data
+    if (!data) {
+      showToast('AI 返回数据异常，请重试')
+      return
+    }
 
     if (data.title) form.title = data.title
     if (data.description) form.description = data.description
@@ -184,7 +190,15 @@ async function aiFill() {
 
     showToast('AI 智能填写完成')
   } catch (err: any) {
-    showToast(err?.message || 'AI 分析失败，请重试')
+    // 优先提取后端返回的具体错误信息
+    let errMsg = 'AI 分析失败，请重试'
+    if (err?.response?.data) {
+      const body = err.response.data
+      errMsg = body.message || body.detail || errMsg
+    } else if (err?.message) {
+      errMsg = err.message
+    }
+    showToast(errMsg)
   } finally {
     aiLoading.value = false
   }

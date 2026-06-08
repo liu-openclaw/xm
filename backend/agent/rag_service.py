@@ -17,7 +17,14 @@ API_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-6c8d44c8b61742abae46c8907b9741
 API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 KNOWLEDGE_FILE = os.path.join(os.path.dirname(__file__), "knowledge", "platform_rules.txt")
 
-app = FastAPI(title="闲趣二手智能客服", version="1.0.0")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_index()
+    yield
+
+app = FastAPI(title="闲趣二手智能客服", version="1.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,7 +33,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ============================================================
 # 知识库与向量索引（纯内存，无文件依赖）
@@ -62,8 +68,8 @@ def get_embeddings(texts: list[str]) -> np.ndarray:
     client = OpenAI(api_key=API_KEY, base_url=API_BASE)
     all_embeddings = []
 
-    # 千问 embedding API 单次限制 10 条，分批处理
-    batch_size = 10
+    # 千问 embedding API 单次限制 10 条，使用 5 条更稳健
+    batch_size = 5
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
         resp = client.embeddings.create(model="text-embedding-v3", input=batch)
@@ -504,6 +510,4 @@ async def health():
 # 启动
 # ============================================================
 if __name__ == "__main__":
-    init_index()
-    print("RAG 服务启动在 http://localhost:8899")
     uvicorn.run(app, host="0.0.0.0", port=8899, log_level="info")

@@ -2,7 +2,7 @@ const mongoose = require('mongoose')
 const User = require('./models/User')
 const Goods = require('./models/Goods')
 
-const MONGO_URL = 'mongodb://localhost:27017/second_hand_trade'
+const MONGO_URL = process.env.MONGO_URL || 'mongodb://mongodb:27017/second_hand_trade'
 
 // 使用稳定的图片服务，确保图片内容与商品匹配
 const goodsData = [

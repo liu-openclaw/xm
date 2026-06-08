@@ -4,10 +4,29 @@ const path = require('path')
 const { execFile } = require('child_process')
 const fs = require('fs')
 
+// 确保上传目录存在（增强健壮性，添加错误处理）
+const uploadDir = path.join(__dirname, '..', 'uploads', 'ai_temp')
+try {
+  if (!fs.existsSync(uploadDir)) {
+    fs.mkdirSync(uploadDir, { recursive: true })
+    console.log('[ai] 已创建上传目录:', uploadDir)
+  }
+} catch (err) {
+  console.error('[ai] 无法创建上传目录:', uploadDir, err.message)
+}
+
 // 临时存储上传的图片
 const upload = multer({
   storage: multer.diskStorage({
-    destination: path.join(__dirname, '..', 'uploads', 'ai_temp'),
+    destination: (req, file, cb) => {
+      // 回调中再次确保目录存在（防止竞态）
+      if (!fs.existsSync(uploadDir)) {
+        try { fs.mkdirSync(uploadDir, { recursive: true }) } catch (e) {
+          return cb(new Error('无法创建上传目录: ' + e.message))
+        }
+      }
+      cb(null, uploadDir)
+    },
     filename: (req, file, cb) => {
       const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9)
       cb(null, uniqueSuffix + path.extname(file.originalname))
@@ -17,14 +36,19 @@ const upload = multer({
   fileFilter: (req, file, cb) => {
     const allowed = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
     const ext = path.extname(file.originalname).toLowerCase()
-    cb(null, allowed.includes(ext))
+    if (!allowed.includes(ext)) {
+      return cb(new Error('不支持的图片格式: ' + ext))
+    }
+    cb(null, true)
   }
 })
 
-// 确保上传目录存在
-const uploadDir = path.join(__dirname, '..', 'uploads', 'ai_temp')
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true })
+/**
+ * 检测可用的 Python 解释器
+ * 优先 python3，其次 python
+ */
+function getPythonCommand() {
+  return process.platform === 'win32' ? 'python' : 'python3'
 }
 
 /**
@@ -38,10 +62,25 @@ router.post('/describe', upload.single('image'), (req, res) => {
 
   const imagePath = req.file.path
   const scriptPath = path.join(__dirname, '..', 'agent', 'describe.py')
+
+  // 检查 Python 脚本是否存在
+  if (!fs.existsSync(scriptPath)) {
+    console.error('[ai] describe.py 不存在:', scriptPath)
+    fs.unlink(imagePath, () => {})
+    return res.status(500).json({
+      code: 500,
+      message: 'AI 分析服务配置错误（脚本缺失）',
+      detail: `脚本路径不存在: ${scriptPath}`
+    })
+  }
+
   const apiKey = process.env.DASHSCOPE_API_KEY || 'sk-6c8d44c8b61742abae46c8907b974133'
+  const pythonCmd = getPythonCommand()
+
+  console.log(`[ai] 执行: ${pythonCmd} ${scriptPath} --image ${imagePath}`)
 
   execFile(
-    'python',
+    pythonCmd,
     [scriptPath, '--image', imagePath, '--api-key', apiKey],
     {
       timeout: 30000,
@@ -54,25 +93,68 @@ router.post('/describe', upload.single('image'), (req, res) => {
       fs.unlink(imagePath, () => {})
 
       if (err) {
-        console.error('describe.py 执行失败:', stderr || err.message)
+        const detail = stderr || err.message
+
+        // 特殊处理：检测常见错误类型
+        if (detail.includes('ENOENT') || detail.includes('not found')) {
+          console.error('[ai] Python 解释器不可用:', detail)
+          return res.status(500).json({
+            code: 500,
+            message: '服务器 Python 环境异常，请联系管理员',
+            detail: `Python 解释器不可用: ${detail}`
+          })
+        }
+
+        if (detail.includes('ModuleNotFoundError') || detail.includes('No module named')) {
+          console.error('[ai] Python 依赖缺失:', detail)
+          return res.status(500).json({
+            code: 500,
+            message: '服务器 Python 依赖缺失，请联系管理员',
+            detail: `依赖缺失: ${detail}`
+          })
+        }
+
+        // 超时
+        if (err.killed || err.code === 'ETIMEDOUT') {
+          return res.status(500).json({
+            code: 500,
+            message: 'AI 分析超时，请稍后重试',
+            detail: String(detail)
+          })
+        }
+
+        console.error('[ai] describe.py 执行失败:', detail)
         return res.status(500).json({
           code: 500,
           message: 'AI 分析失败',
-          detail: stderr || err.message
+          detail: String(detail).substring(0, 500)
         })
       }
 
+      // 正常输出
       try {
-        const result = JSON.parse(stdout.trim())
-        if (result.error) {
-          return res.status(500).json({ code: 500, message: result.error })
+        const stdoutTrimmed = stdout.trim()
+        if (!stdoutTrimmed) {
+          throw new Error('Python 脚本无输出')
         }
+
+        const result = JSON.parse(stdoutTrimmed)
+        if (result.error) {
+          return res.status(500).json({
+            code: 500,
+            message: result.error,
+            detail: result.error
+          })
+        }
+
         res.json({ code: 200, data: result })
       } catch (e) {
+        console.error('[ai] JSON 解析失败:', e.message)
+        console.error('[ai] 原始输出:', stdout.substring(0, 200))
         res.status(500).json({
           code: 500,
           message: 'AI 返回解析失败',
-          raw: stdout.trim()
+          detail: String(stdout).substring(0, 300)
         })
       }
     }

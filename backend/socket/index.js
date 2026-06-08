@@ -38,6 +38,13 @@ function initSocket(server) {
     socket.on('sendMessage', async (data, ack) => {
       try {
         const { receiverId, content, type = 'text', goodsTitle = '' } = data
+
+        // 防止自消息：收件人不能等于发件人
+        if (receiverId === userId) {
+          if (ack) ack({ success: false, message: '不能给自己发消息' })
+          return
+        }
+
         // 生成唯一会话ID（两个用户的ID排序拼接）
         const ids = [userId, receiverId].sort()
         const conversationId = ids[0] + '_' + ids[1]
@@ -69,7 +76,7 @@ function initSocket(server) {
           goodsTitle
         })
 
-        if (ack) ack({ success: true })
+        if (ack) ack({ success: true, messageId: message._id.toString() })
       } catch (err) {
         if (ack) ack({ success: false, message: err.message })
       }

@@ -25,7 +25,6 @@ export const aiApi = {
     const formData = new FormData()
     formData.append('image', imageFile)
     return request.post<any, ApiResponse<DescribeResult>>('/ai/describe', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
       timeout: 30000
     })
   },
