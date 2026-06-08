@@ -18,6 +18,8 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: st_backend
+    entrypoint: [""]
+    command: ["node", "app.js"]
     restart: always
     depends_on:
       mongodb:
