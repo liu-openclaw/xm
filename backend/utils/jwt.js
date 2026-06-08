@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken')
 const config = require('../config')
 
-// 生成双 Token
+// 生成双 Token（payload 需包含 userId 和 tokenVersion）
 function generateTokens(payload) {
   const accessToken = jwt.sign(payload, config.jwt.accessSecret, {
     expiresIn: config.jwt.accessExpire

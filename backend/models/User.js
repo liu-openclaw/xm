@@ -7,7 +7,8 @@ const userSchema = new mongoose.Schema({
   nickname: { type: String, default: '' },
   avatar: { type: String, default: '' },
   phone: { type: String, default: '' },
-  refreshToken: { type: String, default: '' },  // 存储当前有效的 refreshToken，用于单点登录互踢
+  refreshToken: { type: String, default: '' },  // 存储当前有效的 refreshToken
+  tokenVersion: { type: Number, default: 0 },     // 每次登录递增，用于实时单点登录互踢
   createdAt: { type: Date, default: Date.now }
 })
 
