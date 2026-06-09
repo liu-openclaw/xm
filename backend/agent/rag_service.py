@@ -15,6 +15,7 @@ import uvicorn
 # 配置
 API_KEY = os.environ.get("DASHSCOPE_API_KEY", "sk-6c8d44c8b61742abae46c8907b974133")
 API_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY", "")
 KNOWLEDGE_FILE = os.path.join(os.path.dirname(__file__), "knowledge", "platform_rules.txt")
 
 from contextlib import asynccontextmanager
@@ -112,38 +113,35 @@ def search_similar(query: str, k: int = 5) -> list[str]:
 
 
 def web_search_fallback(query: str, k: int = 5) -> list[dict]:
-    """当本地向量库无匹配时，使用 DuckDuckGo 搜索兜底"""
+    """当本地向量库无匹配时，使用 Tavily 搜索兜底"""
     import requests
     
+    if not TAVILY_API_KEY:
+        print("TAVILY_API_KEY 未配置，跳过联网搜索")
+        return []
+    
     try:
-        url = "https://api.duckduckgo.com/"
-        params = {
-            "q": f"二手交易 {query}",
-            "format": "json",
-            "no_html": 1,
-            "skip_disambig": 1,
-        }
-        resp = requests.get(url, params=params, timeout=10)
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={
+                "api_key": TAVILY_API_KEY,
+                "query": query,
+                "search_depth": "basic",
+                "max_results": k,
+            },
+            timeout=15,
+        )
         data = resp.json()
         
         results = []
-        # Abstract
-        if data.get("AbstractText"):
+        for item in data.get("results", [])[:k]:
             results.append({
-                "title": data.get("AbstractSource", "DuckDuckGo"),
-                "snippet": data["AbstractText"],
-                "url": data.get("AbstractURL", "")
+                "title": item.get("title", ""),
+                "snippet": item.get("content", ""),
+                "url": item.get("url", ""),
             })
-        # Related topics
-        for topic in data.get("RelatedTopics", [])[:k]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append({
-                    "title": topic.get("FirstURL", "").split("/")[-1] if topic.get("FirstURL") else "搜索结果",
-                    "snippet": topic["Text"],
-                    "url": topic.get("FirstURL", "")
-                })
         
-        return results[:k]
+        return results
     except Exception as e:
         print(f"联网搜索失败: {e}")
         return []
@@ -162,13 +160,14 @@ def generate_answer(question: str, context_chunks: list[str], history: list[dict
 
     if any("【联网搜索结果】" in c for c in context_chunks):
         system_prompt = (
-            "你是闲趣二手交易平台的智能客服助手。以下信息来自互联网搜索结果，仅供参考。\n"
+            "你是闲趣二手交易平台的智能客服助手。\n"
+            "以下信息来自互联网实时搜索结果，你必须基于这些信息直接回答用户问题。\n"
             "要求：\n"
-            "1. 回答要准确、简洁、友好\n"
-            "2. 如果搜索结果信息不确定，请标注\"根据网络信息\"\n"
-            "3. 建议用户以平台官方规则为准\n"
-            "4. 使用中文回答\n\n"
-            f"参考信息：\n{context_text}"
+            "1. 直接基于搜索结果给出答案，不要回避，不要说\"无法提供\"\n"
+            "2. 如果搜索结果包含具体数据、事实、日期，直接提取引用\n"
+            "3. 如果搜索结果不充分，标注\"根据网络信息\"并给出已知部分\n"
+            "4. 回答简洁友好，使用中文\n\n"
+            f"搜索结果：\n{context_text}"
         )
     else:
         system_prompt = (
@@ -205,13 +204,14 @@ def generate_answer_stream(question: str, context_chunks: list[str], history: li
 
     if any("【联网搜索结果】" in c for c in context_chunks):
         system_prompt = (
-            "你是闲趣二手交易平台的智能客服助手。以下信息来自互联网搜索结果，仅供参考。\n"
+            "你是闲趣二手交易平台的智能客服助手。\n"
+            "以下信息来自互联网实时搜索结果，你必须基于这些信息直接回答用户问题。\n"
             "要求：\n"
-            "1. 回答要准确、简洁、友好\n"
-            "2. 如果搜索结果信息不确定，请标注\"根据网络信息\"\n"
-            "3. 建议用户以平台官方规则为准\n"
-            "4. 使用中文回答\n\n"
-            f"参考信息：\n{context_text}"
+            "1. 直接基于搜索结果给出答案，不要回避，不要说\"无法提供\"\n"
+            "2. 如果搜索结果包含具体数据、事实、日期，直接提取引用\n"
+            "3. 如果搜索结果不充分，标注\"根据网络信息\"并给出已知部分\n"
+            "4. 回答简洁友好，使用中文\n\n"
+            f"搜索结果：\n{context_text}"
         )
     else:
         system_prompt = (
