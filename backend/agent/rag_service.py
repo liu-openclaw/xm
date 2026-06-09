@@ -109,7 +109,19 @@ def search_similar(query: str, k: int = 5) -> list[str]:
     e_norm = _embeddings / (np.linalg.norm(_embeddings, axis=1, keepdims=True) + 1e-10)
     scores = np.dot(e_norm, q_norm)
     top_indices = np.argsort(scores)[::-1][:k]
-    return [_chunks[i] for i in top_indices if scores[i] > 0.3]
+    chunks = [_chunks[i] for i in top_indices if scores[i] > 0.3]
+    return chunks
+
+
+def get_local_relevance_score(query: str) -> float:
+    """计算查询与本地知识库最高余弦相似度，用于判断是否需要联网兜底"""
+    if _embeddings is None:
+        return 0.0
+    q_vec = get_query_embedding(query)
+    q_norm = q_vec / (np.linalg.norm(q_vec) + 1e-10)
+    e_norm = _embeddings / (np.linalg.norm(_embeddings, axis=1, keepdims=True) + 1e-10)
+    scores = np.dot(e_norm, q_norm)
+    return float(np.max(scores))
 
 
 def web_search_fallback(query: str, k: int = 5) -> list[dict]:
@@ -302,11 +314,12 @@ async def rag_query(req: QueryRequest):
 
     try:
         context_chunks = search_similar(req.question, k=5)
-        if not context_chunks:
+        # 本地无匹配，或最高相似度偏低（<0.5），触发联网兜底
+        if not context_chunks or get_local_relevance_score(req.question) < 0.5:
             web_results = web_search_fallback(req.question)
             if web_results:
                 context_chunks = [f"【联网搜索结果】{r['title']}: {r['snippet']}" for r in web_results]
-            else:
+            elif not context_chunks:
                 return QueryResponse(answer="抱歉，我目前没有找到与您问题相关的信息。建议您联系人工客服获取帮助。")
 
         history = get_session_history(req.session_id) if req.session_id else None
@@ -330,11 +343,12 @@ def rag_query_stream(req: QueryRequest):
 
     try:
         context_chunks = search_similar(req.question, k=5)
-        if not context_chunks:
+        # 本地无匹配，或最高相似度偏低（<0.5），触发联网兜底
+        if not context_chunks or get_local_relevance_score(req.question) < 0.5:
             web_results = web_search_fallback(req.question)
             if web_results:
                 context_chunks = [f"【联网搜索结果】{r['title']}: {r['snippet']}" for r in web_results]
-            else:
+            elif not context_chunks:
                 def _no_result():
                     yield f"data: {json.dumps({'type': 'start'}, ensure_ascii=False)}\n\n"
                     yield f"data: {json.dumps({'type': 'delta', 'content': '抱歉，我目前没有找到与您问题相关的信息。建议您联系人工客服获取帮助。'}, ensure_ascii=False)}\n\n"
