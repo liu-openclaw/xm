@@ -1,7 +1,6 @@
 const router = require('express').Router()
 const multer = require('multer')
 const path = require('path')
-const { execFile } = require('child_process')
 const fs = require('fs')
 
 // 确保上传目录存在（增强健壮性，添加错误处理）
@@ -44,16 +43,9 @@ const upload = multer({
 })
 
 /**
- * 检测可用的 Python 解释器
- * 优先 python3，其次 python
- */
-function getPythonCommand() {
-  return process.platform === 'win32' ? 'python' : 'python3'
-}
-
 /**
  * POST /api/ai/describe
- * 接收图片文件，调用 describe.py 生成商品描述
+ * 接收图片文件，通过千问 VL Max API 生成商品描述（纯 Node.js 实现）
  */
 router.post('/describe', upload.single('image'), (req, res) => {
   if (!req.file) {
@@ -61,104 +53,127 @@ router.post('/describe', upload.single('image'), (req, res) => {
   }
 
   const imagePath = req.file.path
-  const scriptPath = path.join(__dirname, '..', 'agent', 'describe.py')
+  const apiKey = process.env.DASHSCOPE_API_KEY || 'sk-6c8d44c8b61742abae46c8907b974133'
 
-  // 检查 Python 脚本是否存在
-  if (!fs.existsSync(scriptPath)) {
-    console.error('[ai] describe.py 不存在:', scriptPath)
+  // 读取图片并转 base64
+  let imageB64, mimeType
+  try {
+    const ext = path.extname(imagePath).toLowerCase()
+    const mimeMap = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
+      '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp'
+    }
+    mimeType = mimeMap[ext] || 'image/jpeg'
+    imageB64 = fs.readFileSync(imagePath).toString('base64')
+  } catch (e) {
     fs.unlink(imagePath, () => {})
-    return res.status(500).json({
-      code: 500,
-      message: 'AI 分析服务配置错误（脚本缺失）',
-      detail: `脚本路径不存在: ${scriptPath}`
-    })
+    console.error('[ai] 读取图片失败:', e.message)
+    return res.status(500).json({ code: 500, message: '读取图片失败', detail: e.message })
   }
 
-  const apiKey = process.env.DASHSCOPE_API_KEY || 'sk-6c8d44c8b61742abae46c8907b974133'
-  const pythonCmd = getPythonCommand()
+  const prompt = (
+    '请根据这张商品图片，生成以下信息，以 JSON 格式返回：\n' +
+    'title（商品标题，20字以内）、\n' +
+    'description（详细描述，50-100字）、\n' +
+    'category（分类，从 数码/家居/服饰/图书/美妆/运动/其他 中选择）、\n' +
+    'condition（成色，从 全新/几乎全新/轻微使用/明显使用 中选择）。\n' +
+    '只输出 JSON，不要其他内容。'
+  )
 
-  console.log(`[ai] 执行: ${pythonCmd} ${scriptPath} --image ${imagePath}`)
+  const payload = JSON.stringify({
+    model: 'qwen-vl-max',
+    messages: [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:${mimeType};base64,${imageB64}` } }
+      ]
+    }],
+    max_tokens: 500,
+    temperature: 0.3
+  })
 
-  execFile(
-    pythonCmd,
-    [scriptPath, '--image', imagePath, '--api-key', apiKey],
-    {
-      timeout: 30000,
-      maxBuffer: 1024 * 1024,
-      encoding: 'utf8',
-      env: { ...process.env, PYTHONIOENCODING: 'utf-8' }
+  const https = require('https')
+
+  const httpReq = https.request({
+    hostname: 'dashscope.aliyuncs.com',
+    path: '/compatible-mode/v1/chat/completions',
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(payload)
     },
-    (err, stdout, stderr) => {
+    timeout: 30000
+  }, (apiRes) => {
+    let data = ''
+    apiRes.on('data', chunk => data += chunk)
+    apiRes.on('end', () => {
       // 清理临时文件
       fs.unlink(imagePath, () => {})
 
-      if (err) {
-        const detail = stderr || err.message
-
-        // 特殊处理：检测常见错误类型
-        if (detail.includes('ENOENT') || detail.includes('not found')) {
-          console.error('[ai] Python 解释器不可用:', detail)
-          return res.status(500).json({
-            code: 500,
-            message: '服务器 Python 环境异常，请联系管理员',
-            detail: `Python 解释器不可用: ${detail}`
-          })
-        }
-
-        if (detail.includes('ModuleNotFoundError') || detail.includes('No module named')) {
-          console.error('[ai] Python 依赖缺失:', detail)
-          return res.status(500).json({
-            code: 500,
-            message: '服务器 Python 依赖缺失，请联系管理员',
-            detail: `依赖缺失: ${detail}`
-          })
-        }
-
-        // 超时
-        if (err.killed || err.code === 'ETIMEDOUT') {
-          return res.status(500).json({
-            code: 500,
-            message: 'AI 分析超时，请稍后重试',
-            detail: String(detail)
-          })
-        }
-
-        console.error('[ai] describe.py 执行失败:', detail)
+      if (apiRes.statusCode !== 200) {
+        console.error('[ai] 千问 API 返回非 200:', apiRes.statusCode, data.substring(0, 300))
         return res.status(500).json({
           code: 500,
-          message: 'AI 分析失败',
-          detail: String(detail).substring(0, 500)
+          message: 'AI 分析服务异常',
+          detail: `API 返回 ${apiRes.statusCode}: ${data.substring(0, 200)}`
         })
       }
 
-      // 正常输出
       try {
-        const stdoutTrimmed = stdout.trim()
-        if (!stdoutTrimmed) {
-          throw new Error('Python 脚本无输出')
+        const apiResult = JSON.parse(data)
+        let content = apiResult.choices[0].message.content.trim()
+
+        // 去掉可能的 markdown 代码块标记
+        if (content.startsWith('```')) {
+          const lines = content.split('\n')
+          if (lines[0].startsWith('```')) {
+            lines.shift()
+            if (lines[lines.length - 1]?.trim() === '```') lines.pop()
+            content = lines.join('\n')
+          }
         }
 
-        const result = JSON.parse(stdoutTrimmed)
-        if (result.error) {
-          return res.status(500).json({
-            code: 500,
-            message: result.error,
-            detail: result.error
-          })
+        // 解析 JSON
+        let result
+        try {
+          result = JSON.parse(content)
+        } catch {
+          const match = content.match(/\{[^{}]*\}/)
+          if (match) {
+            result = JSON.parse(match[0])
+          } else {
+            throw new Error('无法解析模型返回')
+          }
         }
 
         res.json({ code: 200, data: result })
       } catch (e) {
-        console.error('[ai] JSON 解析失败:', e.message)
-        console.error('[ai] 原始输出:', stdout.substring(0, 200))
+        console.error('[ai] 解析千问返回失败:', e.message, data.substring(0, 200))
         res.status(500).json({
           code: 500,
           message: 'AI 返回解析失败',
-          detail: String(stdout).substring(0, 300)
+          detail: data.substring(0, 300)
         })
       }
-    }
-  )
+    })
+  })
+
+  httpReq.on('error', (err) => {
+    fs.unlink(imagePath, () => {})
+    console.error('[ai] 千问 API 请求失败:', err.message)
+    res.status(500).json({ code: 500, message: 'AI 分析请求失败', detail: err.message })
+  })
+
+  httpReq.on('timeout', () => {
+    httpReq.destroy()
+    fs.unlink(imagePath, () => {})
+    res.status(500).json({ code: 500, message: 'AI 分析超时，请稍后重试' })
+  })
+
+  httpReq.write(payload)
+  httpReq.end()
 })
 
 /**
@@ -172,13 +187,25 @@ router.post('/rag', async (req, res) => {
     return res.status(400).json({ code: 400, message: '请输入问题' })
   }
 
+  // 日期类查询拦截：直接返回服务器时间，不消耗 Token
+  const q = question.trim().toLowerCase()
+  if (q.includes('今天几月几日') || q.includes('今天几号') || q.includes('今天日期') || 
+      q.includes('现在几月几日') || q.includes('现在几号') || q.includes('现在日期')) {
+    const now = new Date()
+    now.setHours(now.getHours() + 8) // UTC+8
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const date = String(now.getDate()).padStart(2, '0')
+    return res.json({ code: 200, data: { answer: `今天是${year}年${month}月${date}日。` } })
+  }
+
   try {
     const http = require('http')
 
     const result = await new Promise((resolve, reject) => {
       const postData = JSON.stringify({ question: question.trim(), session_id: sessionId || '' })
       const options = {
-        hostname: 'localhost',
+        hostname: 'rag',
         port: 8899,
         path: '/api/rag/query',
         method: 'POST',
@@ -232,6 +259,20 @@ router.post('/rag/stream', (req, res) => {
     return res.status(400).json({ code: 400, message: '请输入问题' })
   }
 
+  // 日期类查询拦截：直接返回服务器时间，不消耗 Token
+  const q = question.trim().toLowerCase()
+  if (q.includes('今天几月几日') || q.includes('今天几号') || q.includes('今天日期') || 
+      q.includes('现在几月几日') || q.includes('现在几号') || q.includes('现在日期')) {
+    const now = new Date()
+    now.setHours(now.getHours() + 8) // UTC+8
+    const year = now.getFullYear()
+    const month = String(now.getMonth() + 1).padStart(2, '0')
+    const date = String(now.getDate()).padStart(2, '0')
+    res.write(`data: ${JSON.stringify({ token: `今天是${year}年${month}月${date}日。` })}\n\n`)
+    res.write('data: [DONE]\n\n')
+    return res.end()
+  }
+
   const http = require('http')
 
   // 设置 SSE 响应头，禁用缓冲
@@ -245,7 +286,7 @@ router.post('/rag/stream', (req, res) => {
   const postData = JSON.stringify({ question: question.trim(), session_id: sessionId || '' })
 
   const options = {
-    hostname: 'localhost',
+    hostname: 'rag',
     port: 8899,
     path: '/api/rag/query/stream',
     method: 'POST',
@@ -307,7 +348,7 @@ router.post('/rag/advise', async (req, res) => {
 
     const postData = JSON.stringify({ messages })
     const options = {
-      hostname: 'localhost',
+      hostname: 'rag',
       port: 8899,
       path: '/api/rag/advise',
       method: 'POST',
@@ -366,7 +407,7 @@ router.post('/audit', async (req, res) => {
 
     const postData = JSON.stringify({ title, description, category: category || '', condition: condition || '' })
     const options = {
-      hostname: 'localhost',
+      hostname: 'rag',
       port: 8899,
       path: '/api/audit',
       method: 'POST',
