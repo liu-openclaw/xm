@@ -6,6 +6,7 @@ import json
 import numpy as np
 import requests
 import urllib.parse
+from datetime import datetime, timezone, timedelta
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -171,13 +172,17 @@ def generate_answer(question: str, context_chunks: list[str], history: list[dict
     context_text = "\n".join(f"- {chunk}" for chunk in context_chunks)
 
     if any("【联网搜索结果】" in c for c in context_chunks):
+        now = datetime.now(timezone(timedelta(hours=8)))
+        today_str = now.strftime("%Y年%m月%d日")
         system_prompt = (
             "你是闲趣二手交易平台的智能客服助手。\n"
-            "以下信息来自互联网实时搜索结果，你必须基于这些信息直接回答用户问题。\n"
+            f"当前日期：{today_str}。\n"
+            "以下信息来自互联网网页搜索结果（非实时数据API），你必须基于这些信息回答用户问题。\n"
             "要求：\n"
-            "1. 直接基于搜索结果给出答案，不要回避，不要说\"无法提供\"\n"
-            "2. 如果搜索结果包含具体数据、事实、日期，直接提取引用\n"
-            "3. 如果搜索结果不充分，标注\"根据网络信息\"并给出已知部分\n"
+            "1. 基于搜索结果回答，提取其中的具体数据、事实\n"
+            "2. 涉及天气、股价、汇率、赛事比分等实时数据时：如果搜索结果中的日期与当前日期不符"
+            "或无法确认时效性，必须明确指出数据可能不是最新，并建议用户打开对应App查看\n"
+            "3. 如果搜索结果不充分、明显过时或与问题无关，诚实说明，不要编造\n"
             "4. 回答简洁友好，使用中文\n\n"
             f"搜索结果：\n{context_text}"
         )
@@ -215,13 +220,17 @@ def generate_answer_stream(question: str, context_chunks: list[str], history: li
     context_text = "\n".join(f"- {chunk}" for chunk in context_chunks)
 
     if any("【联网搜索结果】" in c for c in context_chunks):
+        now = datetime.now(timezone(timedelta(hours=8)))
+        today_str = now.strftime("%Y年%m月%d日")
         system_prompt = (
             "你是闲趣二手交易平台的智能客服助手。\n"
-            "以下信息来自互联网实时搜索结果，你必须基于这些信息直接回答用户问题。\n"
+            f"当前日期：{today_str}。\n"
+            "以下信息来自互联网网页搜索结果（非实时数据API），你必须基于这些信息回答用户问题。\n"
             "要求：\n"
-            "1. 直接基于搜索结果给出答案，不要回避，不要说\"无法提供\"\n"
-            "2. 如果搜索结果包含具体数据、事实、日期，直接提取引用\n"
-            "3. 如果搜索结果不充分，标注\"根据网络信息\"并给出已知部分\n"
+            "1. 基于搜索结果回答，提取其中的具体数据、事实\n"
+            "2. 涉及天气、股价、汇率、赛事比分等实时数据时：如果搜索结果中的日期与当前日期不符"
+            "或无法确认时效性，必须明确指出数据可能不是最新，并建议用户打开对应App查看\n"
+            "3. 如果搜索结果不充分、明显过时或与问题无关，诚实说明，不要编造\n"
             "4. 回答简洁友好，使用中文\n\n"
             f"搜索结果：\n{context_text}"
         )
